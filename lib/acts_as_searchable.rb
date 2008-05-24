@@ -37,7 +37,7 @@ module ActiveRecord #:nodoc:
     # Example:
     #
     #   class Article < ActiveRecord::Base
-    #     acts_as_searchable
+    #     acts_as_searchable :searchable_fields => :body
     #   end
     #
     #   Article.reindex!
@@ -85,7 +85,7 @@ module ActiveRecord #:nodoc:
 
         # == Configuration options
         #
-        # * <tt>searchable_fields</tt> - Fields to provide searching and indexing for (default: 'body')
+        # * <tt>searchable_fields</tt> - Fields to provide searching and indexing for
         # * <tt>attributes</tt> - Additional attributes to store in Hyper Estraier with the appropriate method supplying the value
         # * <tt>if_changed</tt> - Extra list of attributes to add to the list of attributes that trigger an index update when changed
         #
@@ -123,7 +123,7 @@ module ActiveRecord #:nodoc:
           self.estraier_port        = estraier_config['port'] || 1978
           self.estraier_user        = estraier_config['user'] || 'admin'
           self.estraier_password    = estraier_config['password'] || 'admin'
-          self.searchable_fields    = options[:searchable_fields] || [ :body ]
+          self.searchable_fields    = options[:searchable_fields] || []
           self.attributes_to_store  = options[:attributes] || {}
           self.if_changed           = options[:if_changed] || []
           
@@ -197,7 +197,7 @@ module ActiveRecord #:nodoc:
 
           logger.debug(
             connection.send(:format_log_entry, 
-              "#{self.to_s} seach for '#{query}' (#{sprintf("%f", seconds)})",
+              "#{self.to_s} Search for '#{query}' (#{sprintf("%f", seconds)})",
               "Condition: #{cond.to_s}"
             )
           )
@@ -321,12 +321,12 @@ module ActiveRecord #:nodoc:
             attributes_to_store.each do |attribute, method|
               value = send(method || attribute)
               value = value.xmlschema if value.is_a?(Time)
-              doc.add_attr(attribute_name(attribute), send(method || attribute).to_s)
+              doc.add_attr(attribute_name(attribute), value.to_s)
             end
           end
 
           searchable_fields.each do |f|
-            doc.add_text send(f)
+            doc.add_text(send(f).to_s)
           end
 
           doc          

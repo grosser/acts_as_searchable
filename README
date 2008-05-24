@@ -6,13 +6,15 @@ an ActiveRecord model.
 == Pre-requisites
 
 A working Hyper Estraier instance, setup instructions:
-
-* http://hyperestraier.sourceforge.net/nguide-en.html
+* (install Mac) TODO
+* (install Ubuntu) http://pragmatig.wordpress.com/2008/05/06/getting-started-with-acts_as_searchable-on-ubuntu/
+* (usage) http://hyperestraier.sourceforge.net/nguide-en.html
 
 == Resources
 
 Install
-
+* script/plugin install git://github.com/master/acts_as_searchable.git
+OR
 * gem install acts_as_searchable
 
 Bugtracking
@@ -27,6 +29,6 @@ RDocs
 
 * http://ar-searchable.rubyforge.org
 
-Subversion
+GitHub
 
-* svn://poocs.net/plugins/trunk/acts_as_searchable
+* http://github.com/master/acts_as_searchable

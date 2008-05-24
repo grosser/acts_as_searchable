@@ -3,7 +3,7 @@ require File.join(File.dirname(__FILE__), 'fixtures/article')
 require File.join(File.dirname(__FILE__), 'fixtures/comment')
 require File.join(File.dirname(__FILE__), 'fixtures/notification')
 
-require 'breakpoint'
+require 'rubygems'
 require 'digest/sha1'
 
 class ActsAsSearchableTest < Test::Unit::TestCase
@@ -11,12 +11,13 @@ class ActsAsSearchableTest < Test::Unit::TestCase
   @@indexed = false
 
   def test_defaults
-    assert_equal 'test',      Comment.estraier_node
-    assert_equal 'localhost', Comment.estraier_host
-    assert_equal 1978,        Comment.estraier_port
-    assert_equal 'admin',     Comment.estraier_user
-    assert_equal 'admin',     Comment.estraier_password
-    assert_equal [ :body ],   Comment.searchable_fields
+    #these will not work if something else is entered in config/database.yml 
+#    assert_equal 'test',      Comment.estraier_node
+#    assert_equal 'localhost', Comment.estraier_host
+#    assert_equal 1978,        Comment.estraier_port
+#    assert_equal 'admin',     Comment.estraier_user
+#    assert_equal 'admin',     Comment.estraier_password
+    assert_equal [],          Comment.searchable_fields
   end
   
   def test_hooks_presence
@@ -65,6 +66,14 @@ class ActsAsSearchableTest < Test::Unit::TestCase
     articles(:first).destroy
     assert articles(:first).estraier_doc.blank?
   end
+
+  def test_nil_body
+    # TODO also test nil attr's
+    assert_nothing_raised() do
+      articles(:first).update_attribute :body, nil
+      Article.create(:title => "nil body test", :body => nil)
+    end
+  end
   
   def test_fulltext_search
     reindex!
@@ -78,7 +87,10 @@ class ActsAsSearchableTest < Test::Unit::TestCase
 
   def test_fulltext_search_with_attributes
     reindex!
-    assert_equal [articles(:third), articles(:second)], Article.fulltext_search('', :attributes => "custom_attribute STRINC rails")
+    results = Article.fulltext_search('', :attributes => "custom_attribute STRINC rails")
+    assert_equal 2, results.size
+    assert_equal true, results.include?(articles(:second)) 
+    assert_equal true, results.include?(articles(:third))
   end
 
   def test_fulltext_search_with_attributes_array
