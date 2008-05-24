@@ -116,20 +116,18 @@ module ActiveRecord #:nodoc:
 
           send :include, ActiveRecord::Acts::Searchable::ActMethods
           
-          cattr_accessor :searchable_fields, :attributes_to_store, :if_changed, 
-            :estraier_quiet, :estraier_connection, :estraier_node,
-            :estraier_host, :estraier_port, :estraier_user, 
-            :estraier_password
+          cattr_accessor :searchable_fields, :attributes_to_store, :if_changed, :estraier
 
-          self.estraier_node        = estraier_config['node'] || RAILS_ENV
-          self.estraier_host        = estraier_config['host'] || 'localhost'
-          self.estraier_port        = estraier_config['port'] || 1978
-          self.estraier_user        = estraier_config['user'] || 'admin'
-          self.estraier_password    = estraier_config['password'] || 'admin'
+          self.estraier = EstraierPure::Estraier.new
+          self.estraier.node        = estraier_config['node'] || RAILS_ENV
+          self.estraier.host        = estraier_config['host'] || 'localhost'
+          self.estraier.port        = estraier_config['port'] || 1978
+          self.estraier.user        = estraier_config['user'] || 'admin'
+          self.estraier.password    = estraier_config['password'] || 'admin'
           self.searchable_fields    = options[:searchable_fields] || []
           self.attributes_to_store  = options[:attributes] || {}
           self.if_changed           = options[:if_changed] || []
-          self.estraier_quiet       = options[:quiet] || false
+          self.estraier.quiet       = options[:quiet] || false
           
           send :attr_accessor, :changed_attributes
 
@@ -181,7 +179,7 @@ module ActiveRecord #:nodoc:
 
           matches = nil
           seconds = Benchmark.realtime do
-            result = estraier_connection.search(cond, 1);
+            result = estraier.connection.search(cond, 1);
             return (result.doc_num rescue 0) if options[:count]
             return [] unless result
             matches = get_docs_from(result)
@@ -201,7 +199,7 @@ module ActiveRecord #:nodoc:
         # Clear all entries from index
         def clear_index!
           return unless connection_active?
-          estraier_index.each { |d| estraier_connection.out_doc(d.attr('@id')) unless d.nil? }
+          estraier_index.each { |d| estraier.connection.out_doc(d.attr('@id')) unless d.nil? }
         end
         
         # Peform a full re-index of the model data for this model
@@ -213,7 +211,7 @@ module ActiveRecord #:nodoc:
         def estraier_index #:nodoc:
           cond = EstraierPure::Condition::new
           cond.add_attr("type STREQ #{self.to_s}")
-          result = estraier_connection.search(cond, 1)
+          result = estraier.connection.search(cond, 1)
           docs = get_docs_from(result)
           docs
         end
@@ -237,9 +235,9 @@ module ActiveRecord #:nodoc:
         protected
         
         def connect_estraier #:nodoc:
-          self.estraier_connection = EstraierPure::Node::new
-          self.estraier_connection.set_url("http://#{self.estraier_host}:#{self.estraier_port}/node/#{self.estraier_node}")
-          self.estraier_connection.set_auth(self.estraier_user, self.estraier_password)
+          self.estraier.connection = EstraierPure::Node::new
+          self.estraier.connection.set_url("http://#{self.estraier.host}:#{self.estraier.port}/node/#{self.estraier.node}")
+          self.estraier.connection.set_auth(self.estraier.user, self.estraier.password)
         end
         
         def estraier_config #:nodoc:
@@ -248,9 +246,9 @@ module ActiveRecord #:nodoc:
 
         #raise/log depending on quiet setting
         def connection_active?
-          estraier_connection.name
-          unless estraier_connection.status == 200
-            if self.estraier_quiet
+          estraier.connection.name
+          unless estraier.connection.status == 200
+            if self.estraier.quiet
               logger.error "Can't connect to HyperEstraier Node."
             else
               raise "Can't connect to HyperEstraier Node."
@@ -297,7 +295,7 @@ module ActiveRecord #:nodoc:
         def estraier_doc
           cond = self.class.new_estraier_condition
           cond.add_attr("db_id STREQ #{self.id}")
-          result = self.estraier_connection.search(cond, 1)
+          result = self.estraier.connection.search(cond, 1)
           return unless result and result.doc_num > 0
           get_doc_from(result)
         end
@@ -321,14 +319,14 @@ module ActiveRecord #:nodoc:
         end
 
         def add_to_index #:nodoc:
-          seconds = Benchmark.realtime { estraier_connection.put_doc(document_object) }
+          seconds = Benchmark.realtime { estraier.connection.put_doc(document_object) }
           logger.debug "#{self.class.to_s} [##{id}] Adding to index (#{sprintf("%f", seconds)})"
           
         end
         
         def remove_from_index #:nodoc:
           return unless doc = estraier_doc
-          seconds = Benchmark.realtime { self.estraier_connection.out_doc(doc.attr('@id')) }
+          seconds = Benchmark.realtime { self.estraier.connection.out_doc(doc.attr('@id')) }
           logger.debug "#{self.class.to_s} [##{id}] Removing from index (#{sprintf("%f", seconds)})"
         end
         
@@ -366,6 +364,12 @@ module ActiveRecord #:nodoc:
         end
       end
     end
+  end
+end
+
+module EstraierPure
+  class Estraier < Rails::OrderedOptions
+    
   end
 end
 

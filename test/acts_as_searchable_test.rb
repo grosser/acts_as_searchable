@@ -12,13 +12,13 @@ class ActsAsSearchableTest < Test::Unit::TestCase
 
   def test_defaults
     #these will not work if something else is entered in config/database.yml 
-#    assert_equal 'test',      Comment.estraier_node
-#    assert_equal 'localhost', Comment.estraier_host
-#    assert_equal 1978,        Comment.estraier_port
-#    assert_equal 'admin',     Comment.estraier_user
-#    assert_equal 'admin',     Comment.estraier_password
+#    assert_equal 'test',      Comment.estraier.node
+#    assert_equal 'localhost', Comment.estraier.host
+#    assert_equal 1978,        Comment.estraier.port
+#    assert_equal 'admin',     Comment.estraier.user
+#    assert_equal 'admin',     Comment.estraier.password
     assert_equal [],          Comment.searchable_fields
-    assert_equal false,       Comment.estraier_quiet
+    assert_equal false,       Comment.estraier.quiet
   end
   
   def test_hooks_presence
@@ -28,7 +28,7 @@ class ActsAsSearchableTest < Test::Unit::TestCase
   end
   
   def test_connection
-    assert_kind_of EstraierPure::Node, Article.estraier_connection
+    assert_kind_of EstraierPure::Node, Article.estraier.connection
   end
   
   def test_reindex!
@@ -50,7 +50,7 @@ class ActsAsSearchableTest < Test::Unit::TestCase
     doc = articles(:first).estraier_doc
     assert_equal articles(:first).id.to_s,    doc.attr('db_id')
     assert_equal articles(:first).class.to_s, doc.attr('type')
-    assert Article.estraier_connection.get_doc(doc.attr('@id')).texts.include?(articles(:first).body)
+    assert Article.estraier.connection.get_doc(doc.attr('@id')).texts.include?(articles(:first).body)
   end
   
   def test_after_create_hook
@@ -60,7 +60,7 @@ class ActsAsSearchableTest < Test::Unit::TestCase
     assert_equal a.class.to_s, doc.attr('type')
     assert_equal a.tags,       doc.attr('custom_attribute')
     assert_equal a.title,      doc.attr('@title')
-    assert_equal Article.estraier_connection.get_doc(doc.attr('@id')).texts, [ a.title, a.body ]
+    assert_equal Article.estraier.connection.get_doc(doc.attr('@id')).texts, [ a.title, a.body ]
   end
   
   def test_after_destroy_hook
