@@ -119,11 +119,12 @@ module ActiveRecord #:nodoc:
           cattr_accessor :searchable_fields, :attributes_to_store, :if_changed, :estraier
 
           self.estraier = EstraierPure::Estraier.new
-          self.estraier.node        = estraier_config['node'] || RAILS_ENV
-          self.estraier.host        = estraier_config['host'] || 'localhost'
-          self.estraier.port        = estraier_config['port'] || 1978
-          self.estraier.user        = estraier_config['user'] || 'admin'
-          self.estraier.password    = estraier_config['password'] || 'admin'
+          self.estraier.ar_class    = self
+          self.estraier.node        = estraier.config['node'] || RAILS_ENV
+          self.estraier.host        = estraier.config['host'] || 'localhost'
+          self.estraier.port        = estraier.config['port'] || 1978
+          self.estraier.user        = estraier.config['user'] || 'admin'
+          self.estraier.password    = estraier.config['password'] || 'admin'
           self.searchable_fields    = options[:searchable_fields] || []
           self.attributes_to_store  = options[:attributes] || {}
           self.if_changed           = options[:if_changed] || []
@@ -143,7 +144,7 @@ module ActiveRecord #:nodoc:
               end
             end
 
-            connect_estraier
+            self.estraier.connect
           end
         end
 
@@ -173,7 +174,7 @@ module ActiveRecord #:nodoc:
         #   http://hyperestraier.sourceforge.net/uguide-en.html#searchcond
         #
         def fulltext_search(query = "", options = {})
-          return [] unless connection_active?
+          return [] unless estraier.connection_active?
           options = sanitize_options(options)
           cond = set_search_condition(query, options)
 
@@ -182,7 +183,7 @@ module ActiveRecord #:nodoc:
             result = estraier.connection.search(cond, 1);
             return (result.doc_num rescue 0) if options[:count]
             return [] unless result
-            matches = get_docs_from(result)
+            matches = estraier.get_docs_from(result)
             return matches if options[:raw_matches]
           end
 
@@ -198,32 +199,16 @@ module ActiveRecord #:nodoc:
         
         # Clear all entries from index
         def clear_index!
-          return unless connection_active?
-          estraier_index.each { |d| estraier.connection.out_doc(d.attr('@id')) unless d.nil? }
+          return unless estraier.connection_active?
+          estraier.index.each { |d| estraier.connection.out_doc(d.attr('@id')) unless d.nil? }
         end
         
         # Peform a full re-index of the model data for this model
         def reindex!
-          return unless connection_active?
+          return unless estraier.connection_active?
           find(:all).each { |r| r.update_index(true) }
         end
         
-        def estraier_index #:nodoc:
-          cond = EstraierPure::Condition::new
-          cond.add_attr("type STREQ #{self.to_s}")
-          result = estraier.connection.search(cond, 1)
-          docs = get_docs_from(result)
-          docs
-        end
-        
-        def get_docs_from(result) #:nodoc:
-          docs = []
-          for i in 0...result.doc_num
-            docs << result.get_doc(i)
-          end
-          docs
-        end
-
         def new_estraier_condition #:nodoc
           cond = EstraierPure::Condition::new
           cond.set_options(EstraierPure::Condition::SIMPLE | EstraierPure::Condition::USUAL)
@@ -233,31 +218,6 @@ module ActiveRecord #:nodoc:
         end
 
         protected
-        
-        def connect_estraier #:nodoc:
-          self.estraier.connection = EstraierPure::Node::new
-          self.estraier.connection.set_url("http://#{self.estraier.host}:#{self.estraier.port}/node/#{self.estraier.node}")
-          self.estraier.connection.set_auth(self.estraier.user, self.estraier.password)
-        end
-        
-        def estraier_config #:nodoc:
-          configurations[RAILS_ENV]['estraier'] or {}
-        end
-
-        #raise/log depending on quiet setting
-        def connection_active?
-          estraier.connection.name
-          unless estraier.connection.status == 200
-            if self.estraier.quiet
-              logger.error "Can't connect to HyperEstraier Node."
-            else
-              raise "Can't connect to HyperEstraier Node."
-            end
-            return false
-          end
-          return true
-        end
-
         def sanitize_options(options)
           options.reverse_merge!(:limit => 100, :offset => 0)
           options.assert_valid_keys(VALID_FULLTEXT_OPTIONS)
@@ -297,7 +257,7 @@ module ActiveRecord #:nodoc:
           cond.add_attr("db_id STREQ #{self.id}")
           result = self.estraier.connection.search(cond, 1)
           return unless result and result.doc_num > 0
-          get_doc_from(result)
+          self.estraier.get_doc_from(result)
         end
         
         # If called with no parameters, gets whether the current model has changed and needs to updated in the index.
@@ -330,10 +290,6 @@ module ActiveRecord #:nodoc:
           logger.debug "#{self.class.to_s} [##{id}] Removing from index (#{sprintf("%f", seconds)})"
         end
         
-        def get_doc_from(result) #:nodoc:
-          self.class.get_docs_from(result).first
-        end
-
         def document_object #:nodoc:
           doc = EstraierPure::Document::new
           doc.add_attr('db_id', "#{id}")
@@ -368,8 +324,52 @@ module ActiveRecord #:nodoc:
 end
 
 module EstraierPure
-  class Estraier < Rails::OrderedOptions
+  class Estraier
+    attr_accessor :quiet, :password, :host, :port, :user, :node, :connection, :ar_class
+
+    def connect #:nodoc:
+      self.connection = EstraierPure::Node::new
+      connection.set_url("http://#{host}:#{port}/node/#{node}")
+      connection.set_auth(user, password)
+    end
     
+    #raise/log depending on quiet setting
+    def connection_active?
+      connection.name
+      unless connection.status == 200
+        if quiet
+          logger.error "Can't connect to HyperEstraier Node."
+        else
+          raise "Can't connect to HyperEstraier Node."
+        end
+        return false
+      end
+      return true
+    end
+    
+    def index #:nodoc:
+      cond = EstraierPure::Condition::new
+      cond.add_attr("type STREQ #{ar_class.to_s}")
+      result = connection.search(cond, 1)
+      docs = get_docs_from(result)
+      docs
+    end
+    
+    def config #:nodoc:
+      ar_class.configurations[RAILS_ENV]['estraier'] or {}
+    end
+    
+    def get_doc_from(result) #:nodoc:
+      get_docs_from(result).first
+    end
+    
+    def get_docs_from(result) #:nodoc:
+      docs = []
+      for i in 0...result.doc_num
+        docs << result.get_doc(i)
+      end
+      docs
+    end   
   end
 end
 

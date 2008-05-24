@@ -34,14 +34,14 @@ class ActsAsSearchableTest < Test::Unit::TestCase
   def test_reindex!
     Article.clear_index!
     @@indexed = false
-    assert_equal 0, Article.estraier_index.size
+    assert_equal 0, Article.estraier.index.size
     reindex!
-    assert_equal Article.count, Article.estraier_index.size
+    assert_equal Article.count, Article.estraier.index.size
   end
   
   def test_clear_index!
     Article.clear_index!
-    assert_equal 0, Article.estraier_index.size
+    assert_equal 0, Article.estraier.index.size
     @@indexed = false
   end
   
