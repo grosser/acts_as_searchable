@@ -1,0 +1,6 @@
+INSTALL:
+sqlite3 ==> http://wiki.rubyonrails.org/rails/pages/RailsOnUbuntu
+ruby-debug ==> gem install ruby-debug
+
+RUN: ruby test/acts_as_searchable_test.rb
+
