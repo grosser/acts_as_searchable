@@ -13,7 +13,7 @@ A working Hyper Estraier instance, setup instructions:
 == Resources
 
 Install
-* script/plugin install git://github.com/master/acts_as_searchable.git
+* script/plugin install git://github.com/scoop/master/acts_as_searchable.git 
 OR
 * gem install acts_as_searchable
 
@@ -31,4 +31,4 @@ RDocs
 
 GitHub
 
-* http://github.com/master/acts_as_searchable
+* http://github.com/scoop/master/acts_as_searchable
