@@ -86,8 +86,9 @@ module ActiveRecord #:nodoc:
         # == Configuration options
         #
         # * <tt>searchable_fields</tt> - Fields to provide searching and indexing for
-        # * <tt>attributes</tt> - Additional attributes to store in Hyper Estraier with the appropriate method supplying the value
+        # * <tt>attributes</tt> - Additional attributes to store in Hyper Estraier with the appropriate method supplying the value (not found by pure text-search)
         # * <tt>if_changed</tt> - Extra list of attributes to add to the list of attributes that trigger an index update when changed
+        # * <tt>quiet</tt> - raise(default) or log, if i cannot connect to HE ?
         #
         # Examples:
         #
@@ -115,8 +116,10 @@ module ActiveRecord #:nodoc:
 
           send :include, ActiveRecord::Acts::Searchable::ActMethods
           
-          cattr_accessor :searchable_fields, :attributes_to_store, :if_changed, :estraier_connection, :estraier_node,
-            :estraier_host, :estraier_port, :estraier_user, :estraier_password
+          cattr_accessor :searchable_fields, :attributes_to_store, :if_changed, 
+            :estraier_quiet, :estraier_connection, :estraier_node,
+            :estraier_host, :estraier_port, :estraier_user, 
+            :estraier_password
 
           self.estraier_node        = estraier_config['node'] || RAILS_ENV
           self.estraier_host        = estraier_config['host'] || 'localhost'
@@ -126,6 +129,7 @@ module ActiveRecord #:nodoc:
           self.searchable_fields    = options[:searchable_fields] || []
           self.attributes_to_store  = options[:attributes] || {}
           self.if_changed           = options[:if_changed] || []
+          self.estraier_quiet       = options[:quiet] || false
           
           send :attr_accessor, :changed_attributes
 
@@ -171,20 +175,9 @@ module ActiveRecord #:nodoc:
         #   http://hyperestraier.sourceforge.net/uguide-en.html#searchcond
         #
         def fulltext_search(query = "", options = {})
-          options.reverse_merge!(:limit => 100, :offset => 0)
-          options.assert_valid_keys(VALID_FULLTEXT_OPTIONS)
-
-          find_options = options[:find] || {}
-          [ :limit, :offset ].each { |k| find_options.delete(k) } unless find_options.blank?
-
-          cond = new_estraier_condition
-          cond.set_phrase query
-          [options[:attributes]].flatten.reject { |a| a.blank? }.each do |attr|
-            cond.add_attr attr
-          end
-          cond.set_max   options[:limit]
-          cond.set_skip  options[:offset]
-          cond.set_order options[:order] if options[:order]
+          return [] unless connection_active?
+          options = sanitize_options(options)
+          cond = set_search_condition(query, options)
 
           matches = nil
           seconds = Benchmark.realtime do
@@ -202,16 +195,18 @@ module ActiveRecord #:nodoc:
             )
           )
             
-          matches.blank? ? [] : find(matches.collect { |m| m.attr('db_id') }, find_options)
+          matches.blank? ? [] : find(matches.collect { |m| m.attr('db_id') }, options[:find])
         end
         
         # Clear all entries from index
         def clear_index!
+          return unless connection_active?
           estraier_index.each { |d| estraier_connection.out_doc(d.attr('@id')) unless d.nil? }
         end
         
         # Peform a full re-index of the model data for this model
         def reindex!
+          return unless connection_active?
           find(:all).each { |r| r.update_index(true) }
         end
         
@@ -249,6 +244,40 @@ module ActiveRecord #:nodoc:
         
         def estraier_config #:nodoc:
           configurations[RAILS_ENV]['estraier'] or {}
+        end
+
+        #raise/log depending on quiet setting
+        def connection_active?
+          estraier_connection.name
+          unless estraier_connection.status == 200
+            if self.estraier_quiet
+              logger.error "Can't connect to HyperEstraier Node."
+            else
+              raise "Can't connect to HyperEstraier Node."
+            end
+            return false
+          end
+          return true
+        end
+
+        def sanitize_options(options)
+          options.reverse_merge!(:limit => 100, :offset => 0)
+          options.assert_valid_keys(VALID_FULLTEXT_OPTIONS)
+          options[:find] ||= {}
+          [ :limit, :offset ].each { |k| options[:find].delete(k) }
+          options
+        end
+
+        def set_search_condition(query, options)
+          cond = new_estraier_condition
+          cond.set_phrase query
+          [options[:attributes]].flatten.reject { |a| a.blank? }.each do |attr|
+            cond.add_attr attr
+          end
+          cond.set_max   options[:limit]
+          cond.set_skip  options[:offset]
+          cond.set_order options[:order] if options[:order]
+          cond
         end
       end
       

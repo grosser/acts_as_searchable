@@ -18,6 +18,7 @@ class ActsAsSearchableTest < Test::Unit::TestCase
 #    assert_equal 'admin',     Comment.estraier_user
 #    assert_equal 'admin',     Comment.estraier_password
     assert_equal [],          Comment.searchable_fields
+    assert_equal false,       Comment.estraier_quiet
   end
   
   def test_hooks_presence
