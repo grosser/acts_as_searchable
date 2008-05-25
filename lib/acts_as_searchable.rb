@@ -81,8 +81,6 @@ module ActiveRecord #:nodoc:
       end
       
       module ClassMethods
-        VALID_FULLTEXT_OPTIONS = [:limit, :offset, :order, :attributes, :raw_matches, :find, :count]
-
         # == Configuration options
         #
         # * <tt>searchable_fields</tt> - Fields to provide searching and indexing for
@@ -116,19 +114,19 @@ module ActiveRecord #:nodoc:
 
           send :include, ActiveRecord::Acts::Searchable::ActMethods
           
-          cattr_accessor :searchable_fields, :attributes_to_store, :if_changed, :estraier
-
-          self.estraier = EstraierPure::Estraier.new
-          self.estraier.ar_class    = self
-          self.estraier.node        = estraier.config['node'] || RAILS_ENV
-          self.estraier.host        = estraier.config['host'] || 'localhost'
-          self.estraier.port        = estraier.config['port'] || 1978
-          self.estraier.user        = estraier.config['user'] || 'admin'
-          self.estraier.password    = estraier.config['password'] || 'admin'
+          cattr_accessor :searchable_fields, :attributes_to_store, :if_changed, :estraiers
+          self.estraiers ||= {}
+          self.estraiers[self] = EstraierPure::Estraier.new(self)
+          
+          estraier.node        = estraier.config['node'] || RAILS_ENV
+          estraier.host        = estraier.config['host'] || 'localhost'
+          estraier.port        = estraier.config['port'] || 1978
+          estraier.user        = estraier.config['user'] || 'admin'
+          estraier.password    = estraier.config['password'] || 'admin'
           self.searchable_fields    = options[:searchable_fields] || []
           self.attributes_to_store  = options[:attributes] || {}
           self.if_changed           = options[:if_changed] || []
-          self.estraier.quiet       = options[:quiet] || false
+          estraier.quiet       = options[:quiet] || false
           
           send :attr_accessor, :changed_attributes
 
@@ -145,6 +143,21 @@ module ActiveRecord #:nodoc:
             end
 
             self.estraier.connect
+          end
+        end
+        
+        #we cannot store estraier in a class variable, since it would be overwritten by child classes
+        #=> define 1 estraier for every searchable class, and return it also for child classes
+        def estraier
+          find_estraier_for = self
+          while true
+            if estraiers[find_estraier_for]
+              current_estraier = estraiers[find_estraier_for] 
+              current_estraier.ar_class = self
+              current_estraier.ar_subclasses = subclasses #protected
+              return current_estraier
+            end
+            find_estraier_for = find_estraier_for.base_class
           end
         end
 
@@ -175,8 +188,8 @@ module ActiveRecord #:nodoc:
         #
         def fulltext_search(query = "", options = {})
           return [] unless estraier.connection_active?
-          options = sanitize_options(options)
-          cond = set_search_condition(query, options)
+          options = estraier.sanitize_options(options)
+          cond = estraier.set_search_condition(estraier.create_condition,query, options)
 
           matches = nil
           seconds = Benchmark.realtime do
@@ -208,35 +221,6 @@ module ActiveRecord #:nodoc:
           return unless estraier.connection_active?
           find(:all).each { |r| r.update_index(true) }
         end
-        
-        def new_estraier_condition #:nodoc
-          cond = EstraierPure::Condition::new
-          cond.set_options(EstraierPure::Condition::SIMPLE | EstraierPure::Condition::USUAL)
-          cond.add_attr("type STREQ #{ self.to_s }") if subclasses.blank?
-          cond.add_attr("type_base STREQ #{ base_class.to_s }") unless base_class == self and subclasses.blank?
-          cond
-        end
-
-        protected
-        def sanitize_options(options)
-          options.reverse_merge!(:limit => 100, :offset => 0)
-          options.assert_valid_keys(VALID_FULLTEXT_OPTIONS)
-          options[:find] ||= {}
-          [ :limit, :offset ].each { |k| options[:find].delete(k) }
-          options
-        end
-
-        def set_search_condition(query, options)
-          cond = new_estraier_condition
-          cond.set_phrase query
-          [options[:attributes]].flatten.reject { |a| a.blank? }.each do |attr|
-            cond.add_attr attr
-          end
-          cond.set_max   options[:limit]
-          cond.set_skip  options[:offset]
-          cond.set_order options[:order] if options[:order]
-          cond
-        end
       end
       
       module ActMethods
@@ -253,11 +237,11 @@ module ActiveRecord #:nodoc:
         
         # Retrieve index record for current model object
         def estraier_doc
-          cond = self.class.new_estraier_condition
+          cond = self.class.estraier.create_condition
           cond.add_attr("db_id STREQ #{self.id}")
-          result = self.estraier.connection.search(cond, 1)
+          result = self.class.estraier.connection.search(cond, 1)
           return unless result and result.doc_num > 0
-          self.estraier.get_doc_from(result)
+          self.class.estraier.get_doc_from(result)
         end
         
         # If called with no parameters, gets whether the current model has changed and needs to updated in the index.
@@ -279,14 +263,14 @@ module ActiveRecord #:nodoc:
         end
 
         def add_to_index #:nodoc:
-          seconds = Benchmark.realtime { estraier.connection.put_doc(document_object) }
+          seconds = Benchmark.realtime { self.class.estraier.connection.put_doc(document_object) }
           logger.debug "#{self.class.to_s} [##{id}] Adding to index (#{sprintf("%f", seconds)})"
           
         end
         
         def remove_from_index #:nodoc:
           return unless doc = estraier_doc
-          seconds = Benchmark.realtime { self.estraier.connection.out_doc(doc.attr('@id')) }
+          seconds = Benchmark.realtime { self.class.estraier.connection.out_doc(doc.attr('@id')) }
           logger.debug "#{self.class.to_s} [##{id}] Removing from index (#{sprintf("%f", seconds)})"
         end
         
@@ -296,7 +280,7 @@ module ActiveRecord #:nodoc:
           doc.add_attr('type', "#{self.class.to_s}")
           # Use type instead of self.class.subclasses as the latter is a protected method
           unless self.class.base_class == self.class and not attribute_names.include?("type")
-            doc.add_attr("type_base", "#{ self.class.base_class.to_s }")
+            doc.add_attr("type_base", "#{ self.class.estraier.indexed_base_class.to_s }")
           end
           doc.add_attr('@uri', "/#{self.class.to_s}/#{id}")
           
@@ -325,12 +309,59 @@ end
 
 module EstraierPure
   class Estraier
-    attr_accessor :quiet, :password, :host, :port, :user, :node, :connection, :ar_class
+    VALID_FULLTEXT_OPTIONS = [:limit, :offset, :order, :attributes, :raw_matches, :find, :count]
+    attr_accessor :quiet, :password, :host, :port, :user, :node, :connection, :ar_class, :ar_subclasses
+    
+    #keeps track of which classes are indexed
+    #since when a subclass is not indexed, we need to know which of its parents is
+    cattr_accessor :indexed_classes
+
+    def initialize(indexed_class)
+      self.indexed_classes ||=[]
+      self.indexed_classes << indexed_class
+    end
 
     def connect #:nodoc:
       self.connection = EstraierPure::Node::new
       connection.set_url("http://#{host}:#{port}/node/#{node}")
       connection.set_auth(user, password)
+    end
+    
+    def sanitize_options(options)
+      options.reverse_merge!(:limit => 100, :offset => 0)
+      options.assert_valid_keys(VALID_FULLTEXT_OPTIONS)
+      options[:find] ||= {}
+      [ :limit, :offset ].each { |k| options[:find].delete(k) }
+      options
+    end
+    
+    def create_condition
+      cond = EstraierPure::Condition::new
+      cond.set_options(EstraierPure::Condition::SIMPLE | EstraierPure::Condition::USUAL)
+      cond.add_attr("type STREQ #{ ar_class.to_s }") if ar_subclasses.blank?
+      no_hirarchy = (ar_subclasses.blank? and ar_class == ar_class.base_class)
+      cond.add_attr("type_base STREQ #{ indexed_base_class.to_s }") unless no_hirarchy
+      cond
+    end
+    
+    #find first class in hirachy that is indexed
+    def indexed_base_class
+      current_class = ar_class
+      while true
+        return current_class if indexed_classes.include? current_class
+        current_class = current_class.base_class
+      end
+    end
+    
+    def set_search_condition(cond,query, options)
+      cond.set_phrase query
+      [options[:attributes]].flatten.reject { |a| a.blank? }.each do |attr|
+        cond.add_attr attr
+      end
+      cond.set_max   options[:limit]
+      cond.set_skip  options[:offset]
+      cond.set_order options[:order] if options[:order]
+      cond
     end
     
     #raise/log depending on quiet setting
@@ -349,7 +380,7 @@ module EstraierPure
     
     def index #:nodoc:
       cond = EstraierPure::Condition::new
-      cond.add_attr("type STREQ #{ar_class.to_s}")
+      cond.add_attr("type STREQ #{indexed_base_class.to_s}")
       result = connection.search(cond, 1)
       docs = get_docs_from(result)
       docs

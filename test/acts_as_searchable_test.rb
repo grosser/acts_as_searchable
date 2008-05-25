@@ -166,8 +166,8 @@ class ActsAsSearchableTest < Test::Unit::TestCase
   end
   
   def test_type_base_condition
-    assert ! Article.new_estraier_condition.attrs.include?("type_base STREQ #{Article.to_s}")
-    assert CommentNotification.new_estraier_condition.attrs.include?("type_base STREQ #{Notification.to_s}")
+    assert ! Article.estraier.create_condition.attrs.include?("type_base STREQ #{Article.to_s}")
+    assert CommentNotification.estraier.create_condition.attrs.include?("type_base STREQ #{Notification.to_s}")
   end
   
   def test_fulltext_search_with_sti

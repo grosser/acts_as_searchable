@@ -1,5 +1,5 @@
 class Notification < ActiveRecord::Base
-  acts_as_searchable
+  acts_as_searchable :searchable_fields => [:body]
 end
 
 class CommentNotification < Notification
