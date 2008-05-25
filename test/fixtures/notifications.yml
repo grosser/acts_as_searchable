@@ -6,3 +6,8 @@ second:
   id: 2
   type: CommentNotification
   body: second
+  
+third:
+  id: 3
+  type: DeepCommentNotification
+  body: third

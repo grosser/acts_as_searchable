@@ -338,9 +338,13 @@ module EstraierPure
     def create_condition
       cond = EstraierPure::Condition::new
       cond.set_options(EstraierPure::Condition::SIMPLE | EstraierPure::Condition::USUAL)
-      cond.add_attr("type STREQ #{ ar_class.to_s }") if ar_subclasses.blank?
-      no_hirarchy = (ar_subclasses.blank? and ar_class == ar_class.base_class)
-      cond.add_attr("type_base STREQ #{ indexed_base_class.to_s }") unless no_hirarchy
+      
+      #search for type_base(=>all subclasses) if class is indexed and has subclasses
+      if indexed_base_class == ar_class and !ar_subclasses.blank? 
+        cond.add_attr("type_base STREQ #{ indexed_base_class.to_s }")
+      else
+        cond.add_attr("type STREQ #{ ar_class.to_s }")
+      end
       cond
     end
     

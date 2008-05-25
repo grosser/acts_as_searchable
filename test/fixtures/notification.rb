@@ -4,3 +4,6 @@ end
 
 class CommentNotification < Notification
 end
+
+class DeepCommentNotification < CommentNotification
+end

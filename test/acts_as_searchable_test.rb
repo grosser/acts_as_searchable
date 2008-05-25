@@ -166,13 +166,18 @@ class ActsAsSearchableTest < Test::Unit::TestCase
   end
   
   def test_type_base_condition
-    assert ! Article.estraier.create_condition.attrs.include?("type_base STREQ #{Article.to_s}")
-    assert CommentNotification.estraier.create_condition.attrs.include?("type_base STREQ #{Notification.to_s}")
+    assert Article.estraier.create_condition.attrs.include?("type STREQ #{Article.to_s}")
+    assert Notification.estraier.create_condition.attrs.include?("type_base STREQ #{Notification.to_s}")
+    assert CommentNotification.estraier.create_condition.attrs.include?("type STREQ #{CommentNotification.to_s}")
+    assert DeepCommentNotification.estraier.create_condition.attrs.include?("type STREQ #{DeepCommentNotification.to_s}")
   end
   
   def test_fulltext_search_with_sti
     reindex!
-    assert_equal 2, Notification.fulltext_search('', :count => true)
+    assert_equal 3, Notification.fulltext_search('', :count => true)
+    #TODO? this should theoretically find 2, since DeepCommentNotification is a baseclass
+    #but since CommentNotification is not indexed itself, it will only find record with 
+    #the exact same type
     assert_equal 1, CommentNotification.fulltext_search('', :count => true)
     assert notifications(:second).estraier_doc.attr_names.include?("type_base")
   end
