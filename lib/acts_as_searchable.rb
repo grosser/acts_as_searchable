@@ -305,7 +305,15 @@ module ActiveRecord #:nodoc:
   end
 end
 
+ActiveRecord::Base.send :include, ActiveRecord::Acts::Searchable
+
 module EstraierPure
+  unless defined?(SYSTEM_ATTRIBUTES)
+    SYSTEM_ATTRIBUTES = %w( uri digest cdate mdate adate title author type lang genre size weight misc )
+  end
+  
+  #interface for a searchable class to interact with estraier
+  #TODO factor out more from acts_as_searchable instance methods...
   class EstraierAdapter
     VALID_FULLTEXT_OPTIONS = [:limit, :offset, :order, :attributes, :raw_matches, :find, :count]
     attr_accessor :quiet, :password, :host, :port, :user, :node, :connection,
@@ -397,10 +405,6 @@ module EstraierPure
       docs
     end
     
-    def config #:nodoc:
-      ar_class.configurations[RAILS_ENV]['estraier'] or {}
-    end
-    
     def get_doc_from(result) #:nodoc:
       get_docs_from(result).first
     end
@@ -411,15 +415,11 @@ module EstraierPure
         docs << result.get_doc(i)
       end
       docs
-    end   
-  end
-end
-
-ActiveRecord::Base.send :include, ActiveRecord::Acts::Searchable
-
-module EstraierPure
-  unless defined?(SYSTEM_ATTRIBUTES)
-    SYSTEM_ATTRIBUTES = %w( uri digest cdate mdate adate title author type lang genre size weight misc )
+    end
+  protected
+    def config #:nodoc:
+      ar_class.configurations[RAILS_ENV]['estraier'] or {}
+    end
   end
   
   class Node
