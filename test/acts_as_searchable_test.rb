@@ -17,7 +17,7 @@ class ActsAsSearchableTest < Test::Unit::TestCase
 #    assert_equal 1978,        Comment.estraier.port
 #    assert_equal 'admin',     Comment.estraier.user
 #    assert_equal 'admin',     Comment.estraier.password
-    assert_equal [],          Comment.searchable_fields
+    assert_equal [],          Comment.estraier.searchable_fields
     assert_equal false,       Comment.estraier.quiet
   end
   
@@ -84,6 +84,7 @@ class ActsAsSearchableTest < Test::Unit::TestCase
   def test_fulltext_search_with_wildcard
     reindex!
     assert_equal 1, Article.fulltext_search('mau*').size
+    #retest...this often Fails when timeout is too short
   end
 
   def test_fulltext_search_with_attributes
@@ -142,22 +143,22 @@ class ActsAsSearchableTest < Test::Unit::TestCase
   end
 
   def test_act_if_changed
-    assert ! comments(:first).changed?
+    assert ! comments(:first).estraier_changed?
     comments(:first).article_id = 123
-    assert comments(:first).changed?
+    assert comments(:first).estraier_changed?
   end
   
   def test_act_changed_attributes
-    assert ! articles(:first).changed?
+    assert ! articles(:first).estraier_changed?
     articles(:first).tags = "123" # Covers :attributes
-    assert articles(:first).changed?
+    assert articles(:first).estraier_changed?
     
-    assert ! articles(:second).changed?
+    assert ! articles(:second).estraier_changed?
     articles(:second).body = "123" # Covers :searchable_fields
-    assert articles(:second).changed?
+    assert articles(:second).estraier_changed?
     
     assert articles(:second).save
-    assert ! articles(:second).changed?
+    assert ! articles(:second).estraier_changed?
   end
 
   def test_fulltext_with_count
@@ -176,7 +177,7 @@ class ActsAsSearchableTest < Test::Unit::TestCase
     reindex!
     assert_equal 3, Notification.fulltext_search('', :count => true)
     #TODO? this should theoretically find 2, since DeepCommentNotification is a baseclass
-    #but since CommentNotification is not indexed itself, it will only find record with 
+    #but since CommentNotification is not searchable itself, it will only find record with 
     #the exact same type
     assert_equal 1, CommentNotification.fulltext_search('', :count => true)
     assert notifications(:second).estraier_doc.attr_names.include?("type_base")

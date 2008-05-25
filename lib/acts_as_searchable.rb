@@ -114,31 +114,29 @@ module ActiveRecord #:nodoc:
 
           send :include, ActiveRecord::Acts::Searchable::ActMethods
           
-          cattr_accessor :searchable_fields, :attributes_to_store, :if_changed, :estraiers
+          #each searchable class gets their estraier-adapter (estraier)
+          #these must not be overwritten by subclasses that are searchable too
+          #so using an cattr_accessor estraier will not work
+          cattr_accessor :estraiers
           self.estraiers ||= {}
-          self.estraiers[self] = EstraierPure::Estraier.new(self)
+          self.estraiers[self] = EstraierPure::EstraierAdapter.new(self)
           
-          estraier.node        = estraier.config['node'] || RAILS_ENV
-          estraier.host        = estraier.config['host'] || 'localhost'
-          estraier.port        = estraier.config['port'] || 1978
-          estraier.user        = estraier.config['user'] || 'admin'
-          estraier.password    = estraier.config['password'] || 'admin'
-          self.searchable_fields    = options[:searchable_fields] || []
-          self.attributes_to_store  = options[:attributes] || {}
-          self.if_changed           = options[:if_changed] || []
-          estraier.quiet       = options[:quiet] || false
+          estraier.searchable_fields    = options[:searchable_fields] || []
+          estraier.attributes_to_store  = options[:attributes] || {}
+          update_if_changed             = options[:if_changed] || []
+          estraier.quiet                = options[:quiet] || false
           
-          send :attr_accessor, :changed_attributes
+          send :attr_accessor, :estraier_changed_attributes
 
           class_eval do
             after_update  :update_index
             after_create  :add_to_index
             after_destroy :remove_from_index
-            after_save    :clear_changed_attributes
+            after_save    :estraier_clear_changed_attributes
 
-            (if_changed + searchable_fields + attributes_to_store.collect { |attribute, method| method or attribute }).each do |attr_name|
+            (update_if_changed + estraier.searchable_fields + estraier.attributes_to_store.collect { |attribute, method| method or attribute }).each do |attr_name|
               define_method("#{attr_name}=") do |value|
-                write_changed_attribute attr_name, value
+                estraier_write_changed_attribute attr_name, value
               end
             end
 
@@ -230,7 +228,7 @@ module ActiveRecord #:nodoc:
         
         # Update index for current instance
         def update_index(force = false)
-          return unless changed? or force
+          return unless estraier_changed? or force
           remove_from_index
           add_to_index
         end
@@ -246,19 +244,19 @@ module ActiveRecord #:nodoc:
         
         # If called with no parameters, gets whether the current model has changed and needs to updated in the index.
         # If called with a single parameter, gets whether the parameter has changed.
-        def changed?(attr_name = nil)
-          changed_attributes and (attr_name.nil? ?
-            (not changed_attributes.length.zero?) : (changed_attributes.include?(attr_name.to_s)) )
+        def estraier_changed?(attr_name = nil)
+          estraier_changed_attributes and (attr_name.nil? ?
+            (not estraier_changed_attributes.length.zero?) : (estraier_changed_attributes.include?(attr_name.to_s)) )
         end
         
         protected
         
-        def clear_changed_attributes #:nodoc:
-          self.changed_attributes = []
+        def estraier_clear_changed_attributes #:nodoc:
+          self.estraier_changed_attributes = []
         end
         
-        def write_changed_attribute(attr_name, attr_value) #:nodoc:
-          (self.changed_attributes ||= []) << attr_name.to_s unless self.changed?(attr_name) or self.send(attr_name) == attr_value
+        def estraier_write_changed_attribute(attr_name, attr_value) #:nodoc:
+          (self.estraier_changed_attributes ||= []) << attr_name.to_s unless self.estraier_changed?(attr_name) or self.send(attr_name) == attr_value
           write_attribute(attr_name.to_s, attr_value)
         end
 
@@ -280,19 +278,19 @@ module ActiveRecord #:nodoc:
           doc.add_attr('type', "#{self.class.to_s}")
           # Use type instead of self.class.subclasses as the latter is a protected method
           unless self.class.base_class == self.class and not attribute_names.include?("type")
-            doc.add_attr("type_base", "#{ self.class.estraier.indexed_base_class.to_s }")
+            doc.add_attr("type_base", "#{ self.class.estraier.searchable_base_class.to_s }")
           end
           doc.add_attr('@uri', "/#{self.class.to_s}/#{id}")
           
-          unless attributes_to_store.blank?
-            attributes_to_store.each do |attribute, method|
+          unless self.class.estraier.attributes_to_store.blank?
+            self.class.estraier.attributes_to_store.each do |attribute, method|
               value = send(method || attribute)
               value = value.xmlschema if value.is_a?(Time)
               doc.add_attr(attribute_name(attribute), value.to_s)
             end
           end
 
-          searchable_fields.each do |f|
+          self.class.estraier.searchable_fields.each do |f|
             doc.add_text(send(f).to_s)
           end
 
@@ -308,17 +306,26 @@ module ActiveRecord #:nodoc:
 end
 
 module EstraierPure
-  class Estraier
+  class EstraierAdapter
     VALID_FULLTEXT_OPTIONS = [:limit, :offset, :order, :attributes, :raw_matches, :find, :count]
-    attr_accessor :quiet, :password, :host, :port, :user, :node, :connection, :ar_class, :ar_subclasses
+    attr_accessor :quiet, :password, :host, :port, :user, :node, :connection,
+      :searchable_fields, :attributes_to_store,
+      :ar_class, :ar_subclasses
     
-    #keeps track of which classes are indexed
-    #since when a subclass is not indexed, we need to know which of its parents is
-    cattr_accessor :indexed_classes
+    #keeps track of which classes are searchable
+    #since when a subclass is not searchable, we need to know which of its parents is
+    cattr_accessor :searchable_classes
 
-    def initialize(indexed_class)
-      self.indexed_classes ||=[]
-      self.indexed_classes << indexed_class
+    def initialize(searchable_class)
+      self.ar_class = searchable_class #temporary for initialisation
+      self.searchable_classes ||=[]
+      self.searchable_classes << searchable_class
+      
+      self.node        = config['node'] || RAILS_ENV
+      self.host        = config['host'] || 'localhost'
+      self.port        = config['port'] || 1978
+      self.user        = config['user'] || 'admin'
+      self.password    = config['password'] || 'admin'
     end
 
     def connect #:nodoc:
@@ -339,20 +346,20 @@ module EstraierPure
       cond = EstraierPure::Condition::new
       cond.set_options(EstraierPure::Condition::SIMPLE | EstraierPure::Condition::USUAL)
       
-      #search for type_base(=>all subclasses) if class is indexed and has subclasses
-      if indexed_base_class == ar_class and !ar_subclasses.blank? 
-        cond.add_attr("type_base STREQ #{ indexed_base_class.to_s }")
+      #search for type_base(=>all subclasses) if class is searchable and has subclasses
+      if searchable_base_class == ar_class and !ar_subclasses.blank? 
+        cond.add_attr("type_base STREQ #{ searchable_base_class.to_s }")
       else
         cond.add_attr("type STREQ #{ ar_class.to_s }")
       end
       cond
     end
     
-    #find first class in hirachy that is indexed
-    def indexed_base_class
+    #find first class in hirachy that is searchable
+    def searchable_base_class
       current_class = ar_class
       while true
-        return current_class if indexed_classes.include? current_class
+        return current_class if searchable_classes.include? current_class
         current_class = current_class.base_class
       end
     end
@@ -384,7 +391,7 @@ module EstraierPure
     
     def index #:nodoc:
       cond = EstraierPure::Condition::new
-      cond.add_attr("type STREQ #{indexed_base_class.to_s}")
+      cond.add_attr("type STREQ #{searchable_base_class.to_s}")
       result = connection.search(cond, 1)
       docs = get_docs_from(result)
       docs
