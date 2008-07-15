@@ -134,9 +134,26 @@ module ActiveRecord #:nodoc:
             after_destroy :remove_from_index
             after_save    :estraier_clear_changed_attributes
 
+            #estraier needs to know if this class has subclasses -> different query
+            def self.subclasses_s
+              subclasses.map &:to_s
+            end
+
             (update_if_changed + estraier.searchable_fields + estraier.attributes_to_store.collect { |attribute, method| method or attribute }).each do |attr_name|
-              define_method("#{attr_name}=") do |value|
-                estraier_write_changed_attribute attr_name, value
+              method_to_watch = "#{attr_name}="
+              #FIXME only works on methods included, not class methods...
+              if instance_methods.include?(method_to_watch)
+                define_method("#{attr_name}_with_estraier_update=") do |value|
+                  estraier_write_changed_attribute attr_name, value
+                  send("#{attr_name}_without_estraier_update=",value)
+                end
+                alias_method_chain method_to_watch,'estraier_update'
+              else
+                #its a primitive field
+                define_method(method_to_watch) do |value|
+                  estraier_write_changed_attribute attr_name, value
+                  write_attribute(attr_name.to_s, value)
+                end
               end
             end
 
@@ -144,18 +161,18 @@ module ActiveRecord #:nodoc:
           end
         end
         
-        #we cannot store estraier in a class variable, since it would be overwritten by child classes
-        #=> define 1 estraier for every searchable class, and return it also for child classes
+        #every class in a searchable hirarchy needs its own estraier ,
+        #since search results depend on the current class
         def estraier
+          return estraiers[self] if estraiers[self]
           find_estraier_for = self
           while true
-            if estraiers[find_estraier_for]
-              current_estraier = estraiers[find_estraier_for] 
-              current_estraier.ar_class = self
-              current_estraier.ar_subclasses = subclasses #protected
-              return current_estraier
-            end
             find_estraier_for = find_estraier_for.base_class
+            if estraiers[find_estraier_for]
+              current_estraier = estraiers[find_estraier_for].dup
+              current_estraier.ar_class = self
+              return estraiers[self]=current_estraier
+            end
           end
         end
 
@@ -245,8 +262,9 @@ module ActiveRecord #:nodoc:
         # If called with no parameters, gets whether the current model has changed and needs to updated in the index.
         # If called with a single parameter, gets whether the parameter has changed.
         def estraier_changed?(attr_name = nil)
-          estraier_changed_attributes and (attr_name.nil? ?
-            (not estraier_changed_attributes.length.zero?) : (estraier_changed_attributes.include?(attr_name.to_s)) )
+          return false if estraier_changed_attributes.blank?#nothing changed?
+          return true if attr_name.nil?#something changed?
+          return estraier_changed_attributes.include?(attr_name.to_s)#this attr changed?
         end
         
         protected
@@ -257,13 +275,11 @@ module ActiveRecord #:nodoc:
         
         def estraier_write_changed_attribute(attr_name, attr_value) #:nodoc:
           (self.estraier_changed_attributes ||= []) << attr_name.to_s unless self.estraier_changed?(attr_name) or self.send(attr_name) == attr_value
-          write_attribute(attr_name.to_s, attr_value)
         end
 
         def add_to_index #:nodoc:
           seconds = Benchmark.realtime { self.class.estraier.connection.put_doc(document_object) }
           logger.debug "#{self.class.to_s} [##{id}] Adding to index (#{sprintf("%f", seconds)})"
-          
         end
         
         def remove_from_index #:nodoc:
@@ -325,9 +341,8 @@ module EstraierPure
     cattr_accessor :searchable_classes
 
     def initialize(searchable_class)
-      self.ar_class = searchable_class #temporary for initialisation
-      self.searchable_classes ||=[]
-      self.searchable_classes << searchable_class
+      self.ar_class = searchable_class
+      (self.searchable_classes ||=[]) << searchable_class
       
       self.node        = config['node'] || RAILS_ENV
       self.host        = config['host'] || 'localhost'
@@ -350,12 +365,16 @@ module EstraierPure
       options
     end
     
+    def is_searchable?
+      !!(searchable_base_class == ar_class)
+    end
+
     def create_condition
       cond = EstraierPure::Condition::new
       cond.set_options(EstraierPure::Condition::SIMPLE | EstraierPure::Condition::USUAL)
       
-      #search for type_base(=>all subclasses) if class is searchable and has subclasses
-      if searchable_base_class == ar_class and !ar_subclasses.blank? 
+      #search for type_base(=>all subclasses) ?
+      if is_searchable? and not ar_class.subclasses_s.blank?
         cond.add_attr("type_base STREQ #{ searchable_base_class.to_s }")
       else
         cond.add_attr("type STREQ #{ ar_class.to_s }")
