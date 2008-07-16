@@ -24,254 +24,230 @@
 
 require 'vendor/estraierpure'
 
-module ActiveRecord #:nodoc:
-  module Acts #:nodoc:
-    # Specify this act if you want to provide fulltext search capabilities to your model via Hyper Estraier. This
-    # assumes a setup and running Hyper Estraier node accessible through the HTTP API provided by the EstraierPure
-    # Ruby module (which is bundled with this plugin).
+# Specify this act if you want to provide fulltext search capabilities to your model via Hyper Estraier. This
+# assumes a setup and running Hyper Estraier node accessible through the HTTP API provided by the EstraierPure
+# Ruby module (which is bundled with this plugin).
+#
+# The act supplies appropriate hooks to insert, update and remove documents from the index when you update your
+# model data, create new objects or remove them from your database. For the initial indexing a convenience
+# class method <tt>reindex!</tt> is provided.
+#
+# Example:
+#
+#   class Article < ActiveRecord::Base
+#     acts_as_searchable :searchable_fields => :body
+#   end
+#
+#   Article.reindex!
+#
+# As soon as your model data has been indexed you can make use of the <tt>fulltext_search</tt> class method
+# to search the index and get back instantiated matches.
+#
+#   results = Article.fulltext_search('rails')
+#   results.size        # => 3
+#
+#   results.first.class # => Article
+#   results.first.body  # => "Ruby on Rails is an open-source web framework"
+#
+# Connectivity configuration can be either inherited from conventions or setup globally in the Rails
+# database configuration file <tt>config/database.yml</tt>.
+#
+# Example:
+#
+#   development:
+#     adapter: mysql
+#     database: rails_development
+#     host: localhost
+#     user: root
+#     password:
+#     estraier:
+#       host: localhost
+#       user: admin
+#       password: admin
+#       port: 1978
+#       node: development
+#
+# That way you can configure separate connections for each environment. The values shown above represent the
+# defaults. If you don't need to change any of these it is safe to not specify the <tt>estraier</tt> hash
+# at all.
+#
+# See ActsAsSearchable::ClassMethods#acts_as_searchable for per-model configuration options
+#
+module ActsAsSearchable
+  module ClassMethods
+    # == Configuration options
     #
-    # The act supplies appropriate hooks to insert, update and remove documents from the index when you update your
-    # model data, create new objects or remove them from your database. For the initial indexing a convenience
-    # class method <tt>reindex!</tt> is provided.
+    # * <tt>searchable_fields</tt> - Fields to provide searching and indexing for
+    # * <tt>attributes</tt> - Additional attributes to store in Hyper Estraier with the appropriate method supplying the value (not found by pure text-search)
+    # * <tt>if_changed</tt> - Extra list of attributes to add to the list of attributes that trigger an index update when changed
+    # * <tt>quiet</tt> - raise(default) or log, if i cannot connect to HE ?
     #
-    # Example:
+    # Examples:
     #
-    #   class Article < ActiveRecord::Base
-    #     acts_as_searchable :searchable_fields => :body
-    #   end
+    #   acts_as_searchable :attributes => { :title => nil, :blog => :blog_title }, :searchable_fields => [ :title, :body ]
     #
-    #   Article.reindex!
+    # This would store the return value of the <tt>title</tt> method in the <tt>title</tt> attribute and the return value of the
+    # <tt>blog_title</tt> method in the <tt>blog</tt> attribute. The contents of the <tt>title</tt> and <tt>body</tt> columns
+    # would end up being indexed for searching.
     #
-    # As soon as your model data has been indexed you can make use of the <tt>fulltext_search</tt> class method
-    # to search the index and get back instantiated matches.
+    # == Attribute naming
     #
-    #   results = Article.fulltext_search('rails')
-    #   results.size        # => 3
+    # Attributes that match the reserved names of the Hyper Estraier system attributes are mapped automatically. This is something
+    # to keep in mind for custom ordering options or additional query constraints in <tt>fulltext_search</tt>
+    # For a list of these attributes see <tt>EstraierPure::SYSTEM_ATTRIBUTES</tt> or visit:
     #
-    #   results.first.class # => Article
-    #   results.first.body  # => "Ruby on Rails is an open-source web framework"
+    #   http://hyperestraier.sourceforge.net/uguide-en.html#attributes
     #
-    # Connectivity configuration can be either inherited from conventions or setup globally in the Rails
-    # database configuration file <tt>config/database.yml</tt>.
+    # From the example above:
     #
-    # Example:
+    #   Model.fulltext_search('query', :order => '@title STRA')               # Returns results ordered by title in ascending order
+    #   Model.fulltext_search('query', :attributes => 'blog STREQ poocs.net') # Returns results with a blog attribute of 'poocs.net'
     #
-    #   development:
-    #     adapter: mysql
-    #     database: rails_development
-    #     host: localhost
-    #     user: root
-    #     password:
-    #     estraier:
-    #       host: localhost
-    #       user: admin
-    #       password: admin
-    #       port: 1978
-    #       node: development
-    #
-    # That way you can configure separate connections for each environment. The values shown above represent the
-    # defaults. If you don't need to change any of these it is safe to not specify the <tt>estraier</tt> hash
-    # at all.
-    #
-    # See ActiveRecord::Acts::Searchable::ClassMethods#acts_as_searchable for per-model configuration options
-    #
-    module Searchable
-      def self.included(base) #:nodoc:
-        base.extend ClassMethods        
-      end
+    def acts_as_searchable(options = {})
+      #prevent double inclusion if a base class already is searchable
+      return if self.included_modules.include?(ActsAsSearchable::InstanceMethods)
+      include ActsAsSearchable::InstanceMethods
       
-      module ClassMethods
-        # == Configuration options
-        #
-        # * <tt>searchable_fields</tt> - Fields to provide searching and indexing for
-        # * <tt>attributes</tt> - Additional attributes to store in Hyper Estraier with the appropriate method supplying the value (not found by pure text-search)
-        # * <tt>if_changed</tt> - Extra list of attributes to add to the list of attributes that trigger an index update when changed
-        # * <tt>quiet</tt> - raise(default) or log, if i cannot connect to HE ?
-        #
-        # Examples:
-        #
-        #   acts_as_searchable :attributes => { :title => nil, :blog => :blog_title }, :searchable_fields => [ :title, :body ]
-        #
-        # This would store the return value of the <tt>title</tt> method in the <tt>title</tt> attribute and the return value of the
-        # <tt>blog_title</tt> method in the <tt>blog</tt> attribute. The contents of the <tt>title</tt> and <tt>body</tt> columns
-        # would end up being indexed for searching.
-        #
-        # == Attribute naming
-        #
-        # Attributes that match the reserved names of the Hyper Estraier system attributes are mapped automatically. This is something
-        # to keep in mind for custom ordering options or additional query constraints in <tt>fulltext_search</tt>
-        # For a list of these attributes see <tt>EstraierPure::SYSTEM_ATTRIBUTES</tt> or visit:
-        # 
-        #   http://hyperestraier.sourceforge.net/uguide-en.html#attributes
-        #
-        # From the example above:
-        #
-        #   Model.fulltext_search('query', :order => '@title STRA')               # Returns results ordered by title in ascending order
-        #   Model.fulltext_search('query', :attributes => 'blog STREQ poocs.net') # Returns results with a blog attribute of 'poocs.net'
-        #
-        def acts_as_searchable(options = {})
-          return if self.included_modules.include?(ActiveRecord::Acts::Searchable::ActMethods)
+      #each searchable class gets their estraier-adapter (estraier)
+      #these must not be overwritten by subclasses that are searchable too
+      #so using an cattr_accessor estraier will not work
+      cattr_accessor :estraiers
+      self.estraiers ||= {}
+      self.estraiers[self] = ActsAsSearchable::EstraierAdapter.new(self,options)
 
-          send :include, ActiveRecord::Acts::Searchable::ActMethods
-          
-          #each searchable class gets their estraier-adapter (estraier)
-          #these must not be overwritten by subclasses that are searchable too
-          #so using an cattr_accessor estraier will not work
-          cattr_accessor :estraiers
-          self.estraiers ||= {}
-          self.estraiers[self] = EstraierPure::EstraierAdapter.new(self)
-          
-          estraier.searchable_fields    = options[:searchable_fields] || []
-          estraier.attributes_to_store  = options[:attributes] || {}
-          estraier.update_if_changed    = options[:if_changed] || []
-          estraier.quiet                = options[:quiet] || false
-          
-          send :attr_accessor, :estraier_changed_attributes
+      send :attr_accessor, :estraier_changed_attributes
 
-          class_eval do
-            after_update  :update_index
-            after_create  :add_to_index
-            after_destroy :remove_from_index
-            after_save    :estraier_clear_changed_attributes
+      class_eval do
+        after_update  :update_index
+        after_create  :add_to_index
+        after_destroy :remove_from_index
+        after_save    :estraier_clear_changed_attributes
 
-            #estraier needs to know if this class has subclasses -> different query
-            #but subclasses is protected
-            def self.subclasses_s
-              subclasses.map &:to_s
-            end
-
-            estraier.watched_for_change.each do |attr_name|
-              method_to_watch = "#{attr_name}="
-              #FIXME only works on methods included, not class methods...
-              if instance_methods.include?(method_to_watch)
-                define_method("#{attr_name}_with_estraier_update=") do |value|
-                  estraier_write_changed_attribute attr_name, value
-                  send("#{attr_name}_without_estraier_update=",value)
-                end
-                alias_method_chain method_to_watch,'estraier_update'
-              else
-                #its a primitive field
-                define_method(method_to_watch) do |value|
-                  estraier_write_changed_attribute attr_name, value
-                  write_attribute(attr_name.to_s, value)
-                end
-              end
-            end
-
-            estraier.connect
-          end
+        #estraier needs to know if this class has subclasses -> different query
+        #but subclasses is protected
+        def self.subclasses_s
+          subclasses.map &:to_s
         end
-        
-        #every class in a searchable hirarchy needs its own estraier adapter,
-        #since search results depend on the current class
-        def estraier
-          return estraiers[self] if estraiers[self]
-          find_estraier_for = self
-          while true
-            find_estraier_for = find_estraier_for.base_class
-            if estraiers[find_estraier_for]
-              current_estraier = estraiers[find_estraier_for].dup
-              current_estraier.ar_class = self
-              return estraiers[self]=current_estraier
+
+        #overwrite attributes and alias methods to watch for changes
+        estraier.watched_for_change.each do |attr_name|
+          method_to_watch = "#{attr_name}="
+          #FIXME only works on methods included, not real instance methods...
+          if instance_methods.include?(method_to_watch)
+            define_method("#{attr_name}_with_estraier_update=") do |value|
+              estraier_write_changed_attribute attr_name, value
+              send("#{attr_name}_without_estraier_update=",value)
+            end
+            alias_method_chain method_to_watch.to_sym,'estraier_update'.to_sym
+          else
+            #its a primitive field
+            define_method(method_to_watch) do |value|
+              estraier_write_changed_attribute attr_name, value
+              write_attribute(attr_name.to_s, value)
             end
           end
         end
 
-        delegate :fulltext_search,:clear_index!,:reindex!, :to=>:estraier
+        estraier.connect
       end
-      
-      module ActMethods
-        def self.included(base) #:nodoc:
-          base.extend ClassMethods
-        end
-        
-        # Update index for current instance
-        def update_index(force = false)
-          return unless estraier_changed? or force
-          remove_from_index
-          add_to_index
-        end
-        
-        # Retrieve index record for current model object
-        def estraier_doc
-          cond = self.class.estraier.create_condition
-          cond.add_attr("db_id STREQ #{self.id}")
-          result = self.class.estraier.connection.search(cond, 1)
-          return unless result and result.doc_num > 0
-          self.class.estraier.get_doc_from(result)
-        end
-        
-        # If called with no parameters, gets whether the current model has changed and needs to updated in the index.
-        # If called with a single parameter, gets whether the parameter has changed.
-        def estraier_changed?(attr_name = nil)
-          return false if estraier_changed_attributes.blank?#nothing changed?
-          return true if attr_name.nil?#something changed?
-          return estraier_changed_attributes.include?(attr_name.to_s)#this attr changed?
-        end
-        
-        protected
-        
-        def estraier_clear_changed_attributes #:nodoc:
-          self.estraier_changed_attributes = []
-        end
-        
-        def estraier_write_changed_attribute(attr_name, attr_value) #:nodoc:
-          (self.estraier_changed_attributes ||= []) << attr_name.to_s unless self.estraier_changed?(attr_name) or self.send(attr_name) == attr_value
-        end
+    end
 
-        def add_to_index #:nodoc:
-          seconds = Benchmark.realtime { self.class.estraier.connection.put_doc(document_object) }
-          logger.debug "#{self.class.to_s} [##{id}] Adding to index (#{sprintf("%f", seconds)})"
-        end
-        
-        def remove_from_index #:nodoc:
-          return unless doc = estraier_doc
-          seconds = Benchmark.realtime { self.class.estraier.connection.out_doc(doc.attr('@id')) }
-          logger.debug "#{self.class.to_s} [##{id}] Removing from index (#{sprintf("%f", seconds)})"
-        end
-        
-        def document_object #:nodoc:
-          doc = EstraierPure::Document::new
-          doc.add_attr('db_id', "#{id}")
-          doc.add_attr('type', "#{self.class.to_s}")
-          # Use type instead of self.class.subclasses as the latter is a protected method
-          unless self.class.base_class == self.class and not attribute_names.include?("type")
-            doc.add_attr("type_base", "#{ self.class.estraier.searchable_base_class.to_s }")
-          end
-          doc.add_attr('@uri', "/#{self.class.to_s}/#{id}")
-          
-          unless self.class.estraier.attributes_to_store.blank?
-            self.class.estraier.attributes_to_store.each do |attribute, method|
-              value = send(method || attribute)
-              value = value.xmlschema if value.is_a?(Time)
-              doc.add_attr(attribute_name(attribute), value.to_s)
-            end
-          end
-
-          self.class.estraier.searchable_fields.each do |f|
-            doc.add_text(send(f).to_s)
-          end
-
-          doc          
-        end
-        
-        def attribute_name(attribute)
-          EstraierPure::SYSTEM_ATTRIBUTES.include?(attribute.to_s) ? "@#{attribute}" : "#{attribute}"
+    #every class in a searchable hirarchy needs its own estraier adapter,
+    #since search results depend on the current class
+    def estraier
+      return estraiers[self] if estraiers[self]
+      #create a copy of an existing estraier
+      find_estraier_for = self
+      while true
+        find_estraier_for = find_estraier_for.base_class
+        if estraiers[find_estraier_for]
+          current_estraier = estraiers[find_estraier_for].dup
+          current_estraier.ar_class = self
+          return estraiers[self]=current_estraier
         end
       end
     end
+
+    delegate :fulltext_search,:clear_index!,:reindex!, :to=>:estraier
   end
-end
 
-ActiveRecord::Base.send :include, ActiveRecord::Acts::Searchable
+  module InstanceMethods
+    # Update index for current instance
+    def update_index(force = false)
+      return unless estraier_changed? or force
+      remove_from_index
+      add_to_index
+    end
 
-module EstraierPure
-  unless defined?(SYSTEM_ATTRIBUTES)
-    SYSTEM_ATTRIBUTES = %w( uri digest cdate mdate adate title author type lang genre size weight misc )
+    # Retrieve index record for current model object
+    def estraier_doc
+      cond = self.class.estraier.create_condition
+      cond.add_attr("db_id STREQ #{self.id}")
+      result = self.class.estraier.connection.search(cond, 1)
+      return unless result and result.doc_num > 0
+      self.class.estraier.get_doc_from(result)
+    end
+
+    # If called with no parameters, gets whether the current model has changed and needs to updated in the index.
+    # If called with a single parameter, gets whether the parameter has changed.
+    def estraier_changed?(attr_name = nil)
+      return false if estraier_changed_attributes.blank?#nothing changed?
+      return true if attr_name.nil?#something changed?
+      return estraier_changed_attributes.include?(attr_name.to_s)#this attr changed?
+    end
+
+    protected
+
+    def estraier_clear_changed_attributes #:nodoc:
+      self.estraier_changed_attributes = []
+    end
+
+    def estraier_write_changed_attribute(attr_name, attr_value) #:nodoc:
+      (self.estraier_changed_attributes ||= []) << attr_name.to_s unless estraier_changed?(attr_name) or send(attr_name) == attr_value
+    end
+
+    def add_to_index #:nodoc:
+      seconds = Benchmark.realtime { self.class.estraier.connection.put_doc(document_object) }
+      logger.debug "#{self.class.to_s} [##{id}] Adding to index (#{sprintf("%f", seconds)})"
+    end
+
+    def remove_from_index #:nodoc:
+      return unless doc = estraier_doc
+      seconds = Benchmark.realtime { self.class.estraier.connection.out_doc(doc.attr('@id')) }
+      logger.debug "#{self.class.to_s} [##{id}] Removing from index (#{sprintf("%f", seconds)})"
+    end
+
+    def document_object #:nodoc:
+      doc = EstraierPure::Document::new
+      doc.add_attr('db_id', "#{id}")
+      doc.add_attr('type', "#{self.class.to_s}")
+      # Use type instead of self.class.subclasses as the latter is a protected method
+      unless self.class.base_class == self.class and not attribute_names.include?("type")
+        doc.add_attr("type_base", "#{ self.class.estraier.searchable_base_class.to_s }")
+      end
+      doc.add_attr('@uri', "/#{self.class.to_s}/#{id}")
+
+      unless self.class.estraier.attributes_to_store.blank?
+        self.class.estraier.attributes_to_store.each do |attribute, method|
+          value = send(method || attribute)
+          value = value.xmlschema if value.is_a?(Time)
+          doc.add_attr(attribute_name(attribute), value.to_s)
+        end
+      end
+
+      self.class.estraier.searchable_fields.each do |f|
+        doc.add_text(send(f).to_s)
+      end
+
+      doc
+    end
+
+    def attribute_name(attribute)
+      EstraierPure::SYSTEM_ATTRIBUTES.include?(attribute.to_s) ? "@#{attribute}" : "#{attribute}"
+    end
   end
   
   #interface for a searchable class to interact with estraier
-  #TODO factor out more from acts_as_searchable instance methods...
   class EstraierAdapter
     VALID_FULLTEXT_OPTIONS = [:limit, :offset, :order, :attributes, :raw_matches, :find, :count]
     attr_accessor :quiet, :password, :host, :port, :user, :node, :connection,
@@ -282,7 +258,7 @@ module EstraierPure
     #since when a subclass is not searchable, we need to know which of its parents is
     cattr_accessor :searchable_classes
 
-    def initialize(searchable_class)
+    def initialize(searchable_class,options)
       self.ar_class = searchable_class
       (self.searchable_classes ||=[]) << searchable_class
       
@@ -291,6 +267,11 @@ module EstraierPure
       self.port        = config['port'] || 1978
       self.user        = config['user'] || 'admin'
       self.password    = config['password'] || 'admin'
+
+      self.searchable_fields    = options[:searchable_fields] || []
+      self.attributes_to_store  = options[:attributes] || {}
+      self.update_if_changed    = options[:if_changed] || []
+      self.quiet                = options[:quiet] || false
     end
 
     def watched_for_change
@@ -446,7 +427,13 @@ module EstraierPure
       ar_class.configurations[RAILS_ENV]['estraier'] or {}
     end
   end
+end
 
+#EstraierPure hacks and additions
+module EstraierPure
+  unless defined?(SYSTEM_ATTRIBUTES)
+    SYSTEM_ATTRIBUTES = %w( uri digest cdate mdate adate title author type lang genre size weight misc )
+  end
 
   class Node
     def list

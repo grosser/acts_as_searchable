@@ -145,7 +145,7 @@ class ActsAsSearchableTest < Test::Unit::TestCase
   def test_does_not_overwrite_attrs
     comments(:first).body_set='NEW'
     assert_equal comments(:first).body_set,'NEW'
-#    assert comments(:first).estraier_changed?
+    assert comments(:first).estraier_changed?
   end
 
   def test_act_if_changed
