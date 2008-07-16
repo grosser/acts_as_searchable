@@ -80,7 +80,14 @@ class ActsAsSearchableTest < Test::Unit::TestCase
     reindex!
     assert_equal 1, Article.fulltext_search('mauris', :count => true)
   end
-  
+
+  def test_fulltext_search_all_types
+    reindex!
+    assert_equal 1, Article.fulltext_search('mauris', :count => true,:all_types=>true)
+    assert_equal 7,Article.fulltext_search('', :count => true,:all_types=>true)
+    assert_equal 3,Article.fulltext_search('', :all_types=>true).length#all_tyes is ignored if not applicable
+  end
+
   def test_fulltext_search_with_wildcard
     reindex!
     assert_equal 1, Article.fulltext_search('mau*').size

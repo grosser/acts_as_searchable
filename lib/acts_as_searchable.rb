@@ -249,7 +249,7 @@ module ActsAsSearchable
   
   #interface for a searchable class to interact with estraier
   class EstraierAdapter
-    VALID_FULLTEXT_OPTIONS = [:limit, :offset, :order, :attributes, :raw_matches, :find, :count]
+    VALID_FULLTEXT_OPTIONS = [:limit, :offset, :order, :attributes, :raw_matches, :find, :count,:all_types]
     attr_accessor :quiet, :password, :host, :port, :user, :node, :connection,
       :searchable_fields, :attributes_to_store, :update_if_changed,
       :ar_class
@@ -284,14 +284,6 @@ module ActsAsSearchable
       connection.set_auth(user, password)
     end
     
-    def sanitize_options(options)
-      options.reverse_merge!(:limit => 100, :offset => 0)
-      options.assert_valid_keys(VALID_FULLTEXT_OPTIONS)
-      options[:find] ||= {}
-      [ :limit, :offset ].each { |k| options[:find].delete(k) }
-      options
-    end
-    
     def is_searchable?
       !!(searchable_base_class == ar_class)
     end
@@ -323,7 +315,10 @@ module ActsAsSearchable
     def fulltext_search(query = "", options = {})
       return [] unless connection_active?
       options = sanitize_options(options)
-      cond = set_search_condition(create_condition,query, options)
+      #all_types not in combination with raw or count will produce false results
+      #eg db_ids that are not in the current table -> boom
+      all_types = (options[:all_types] and (options[:raw] or options[:count]))
+      cond = set_search_condition(create_condition(all_types),query, options)
 
       matches = nil
       seconds = Benchmark.realtime do
@@ -356,17 +351,10 @@ module ActsAsSearchable
       ar_class.find(:all).each { |r| r.update_index(true) }
     end
 
-    def create_condition
-      cond = EstraierPure::Condition::new
-      cond.set_options(EstraierPure::Condition::SIMPLE | EstraierPure::Condition::USUAL)
-      
-      #search for type_base(=>all subclasses) ?
-      if is_searchable? and not ar_class.subclasses_s.blank?
-        cond.add_attr("type_base STREQ #{ searchable_base_class.to_s }")
-      else
-        cond.add_attr("type STREQ #{ ar_class.to_s }")
-      end
-      cond
+    def create_condition(all_types=false)
+      condition = EstraierPure::Condition::new
+      condition.set_options(EstraierPure::Condition::SIMPLE | EstraierPure::Condition::USUAL)
+      add_type_conditions(condition,all_types)
     end
     
     #find first class in hirachy that is searchable
@@ -388,7 +376,22 @@ module ActsAsSearchable
       cond.set_order options[:order] if options[:order]
       cond
     end
-    
+
+    def add_type_conditions(condition,all_types)
+      if all_types
+        condition.add_attr("db_id NUMGT 0")#have to add something or 0 results...
+        return condition
+      end
+
+      #search for type_base(=>all subclasses) ?
+      if is_searchable? and not ar_class.subclasses_s.blank?
+        condition.add_attr("type_base STREQ #{ searchable_base_class.to_s }")
+      else
+        condition.add_attr("type STREQ #{ ar_class.to_s }")
+      end
+      condition
+    end
+
     #raise/log depending on quiet setting
     def connection_active?
       connection.name
@@ -423,6 +426,14 @@ module ActsAsSearchable
       docs
     end
   protected
+    def sanitize_options(options)
+      options.reverse_merge!(:limit => 100, :offset => 0)
+      options.assert_valid_keys(VALID_FULLTEXT_OPTIONS)
+      options[:find] ||= {}
+      [ :limit, :offset ].each { |k| options[:find].delete(k) }
+      options
+    end
+
     def config #:nodoc:
       ar_class.configurations[RAILS_ENV]['estraier'] or {}
     end
