@@ -60,6 +60,7 @@ class ActsAsSearchableTest < Test::Unit::TestCase
     assert_equal a.class.to_s, doc.attr('type')
     assert_equal a.tags,       doc.attr('custom_attribute')
     assert_equal a.title,      doc.attr('@title')
+    assert_equal a.created_at.to_s, Time.parse(doc.attr('@cdate')).to_s
     assert_equal Article.estraier.connection.get_doc(doc.attr('@id')).texts, [ a.title, a.body ]
   end
   

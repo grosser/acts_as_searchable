@@ -272,6 +272,15 @@ module ActsAsSearchable
       self.attributes_to_store  = options[:attributes] || {}
       self.update_if_changed    = options[:if_changed] || []
       self.quiet                = options[:quiet] || false
+
+      #add the timestamps if they are recorded on the model
+      unless options[:ignore_timestamp] && ar_class.record_timestamps
+        timestamp_attr = {
+          "cdate" => %w(created_at created_on).detect{|col| ar_class.column_names.include?(col) },
+          "mdate" => %w(updated_at updated_on).detect{|col| ar_class.column_names.include?(col) },
+        }.reject!{|k,v|v.blank?}
+        self.attributes_to_store = timestamp_attr.merge(self.attributes_to_store)
+      end
     end
 
     def watched_for_change
