@@ -123,7 +123,7 @@ module ActiveRecord #:nodoc:
           
           estraier.searchable_fields    = options[:searchable_fields] || []
           estraier.attributes_to_store  = options[:attributes] || {}
-          update_if_changed             = options[:if_changed] || []
+          estraier.update_if_changed    = options[:if_changed] || []
           estraier.quiet                = options[:quiet] || false
           
           send :attr_accessor, :estraier_changed_attributes
@@ -135,11 +135,12 @@ module ActiveRecord #:nodoc:
             after_save    :estraier_clear_changed_attributes
 
             #estraier needs to know if this class has subclasses -> different query
+            #but subclasses is protected
             def self.subclasses_s
               subclasses.map &:to_s
             end
 
-            (update_if_changed + estraier.searchable_fields + estraier.attributes_to_store.collect { |attribute, method| method or attribute }).each do |attr_name|
+            estraier.watched_for_change.each do |attr_name|
               method_to_watch = "#{attr_name}="
               #FIXME only works on methods included, not class methods...
               if instance_methods.include?(method_to_watch)
@@ -157,11 +158,11 @@ module ActiveRecord #:nodoc:
               end
             end
 
-            self.estraier.connect
+            estraier.connect
           end
         end
         
-        #every class in a searchable hirarchy needs its own estraier ,
+        #every class in a searchable hirarchy needs its own estraier adapter,
         #since search results depend on the current class
         def estraier
           return estraiers[self] if estraiers[self]
@@ -176,66 +177,7 @@ module ActiveRecord #:nodoc:
           end
         end
 
-        # Perform a fulltext search against the Hyper Estraier index.
-        #
-        # Options taken:
-        # * <tt>limit</tt>       - Maximum number of records to retrieve (default: <tt>100</tt>)
-        # * <tt>offset</tt>      - Number of records to skip (default: <tt>0</tt>)
-        # * <tt>order</tt>       - Hyper Estraier expression to sort the results (example: <tt>@title STRA</tt>, default: ordering by score)
-        # * <tt>attributes</tt>  - String to append to Hyper Estraier search query
-        # * <tt>raw_matches</tt> - Returns raw Hyper Estraier documents instead of instantiated AR objects
-        # * <tt>find</tt>        - Options to pass on to the <tt>ActiveRecord::Base#find</tt> call
-        # * <tt>count</tt>       - Set this to <tt>true</tt> if you're using <tt>fulltext_search</tt> in conjunction with <tt>ActionController::Pagination</tt> to return the number of matches only
-        #
-        # Examples:
-        # 
-        #   Article.fulltext_search("biscuits AND gravy")
-        #   Article.fulltext_search("biscuits AND gravy", :limit => 15, :offset => 14)
-        #   Article.fulltext_search("biscuits AND gravy", :attributes => "tag STRINC food")
-        #   Article.fulltext_search("biscuits AND gravy", :attributes => ["tag STRINC food", "@title STRBW Biscuit"])
-        #   Article.fulltext_search("biscuits AND gravy", :order => "@title STRA")
-        #   Article.fulltext_search("biscuits AND gravy", :raw_matches => true)
-        #   Article.fulltext_search("biscuits AND gravy", :find => { :order => :title, :include => :comments })
-        #
-        # Consult the Hyper Estraier documentation on proper query syntax:
-        # 
-        #   http://hyperestraier.sourceforge.net/uguide-en.html#searchcond
-        #
-        def fulltext_search(query = "", options = {})
-          return [] unless estraier.connection_active?
-          options = estraier.sanitize_options(options)
-          cond = estraier.set_search_condition(estraier.create_condition,query, options)
-
-          matches = nil
-          seconds = Benchmark.realtime do
-            result = estraier.connection.search(cond, 1);
-            return (result.doc_num rescue 0) if options[:count]
-            return [] unless result
-            matches = estraier.get_docs_from(result)
-            return matches if options[:raw_matches]
-          end
-
-          logger.debug(
-            connection.send(:format_log_entry, 
-              "#{self.to_s} Search for '#{query}' (#{sprintf("%f", seconds)})",
-              "Condition: #{cond.to_s}"
-            )
-          )
-            
-          matches.blank? ? [] : find(matches.collect { |m| m.attr('db_id') }, options[:find])
-        end
-        
-        # Clear all entries from index
-        def clear_index!
-          return unless estraier.connection_active?
-          estraier.index.each { |d| estraier.connection.out_doc(d.attr('@id')) unless d.nil? }
-        end
-        
-        # Peform a full re-index of the model data for this model
-        def reindex!
-          return unless estraier.connection_active?
-          find(:all).each { |r| r.update_index(true) }
-        end
+        delegate :fulltext_search,:clear_index!,:reindex!, :to=>:estraier
       end
       
       module ActMethods
@@ -333,8 +275,8 @@ module EstraierPure
   class EstraierAdapter
     VALID_FULLTEXT_OPTIONS = [:limit, :offset, :order, :attributes, :raw_matches, :find, :count]
     attr_accessor :quiet, :password, :host, :port, :user, :node, :connection,
-      :searchable_fields, :attributes_to_store,
-      :ar_class, :ar_subclasses
+      :searchable_fields, :attributes_to_store, :update_if_changed,
+      :ar_class
     
     #keeps track of which classes are searchable
     #since when a subclass is not searchable, we need to know which of its parents is
@@ -349,6 +291,10 @@ module EstraierPure
       self.port        = config['port'] || 1978
       self.user        = config['user'] || 'admin'
       self.password    = config['password'] || 'admin'
+    end
+
+    def watched_for_change
+      @watched_for_change||=update_if_changed + searchable_fields + attributes_to_store.collect { |attribute, method| method or attribute }
     end
 
     def connect #:nodoc:
@@ -367,6 +313,66 @@ module EstraierPure
     
     def is_searchable?
       !!(searchable_base_class == ar_class)
+    end
+
+    # Perform a fulltext search against the Hyper Estraier index.
+    #
+    # Options taken:
+    # * <tt>limit</tt>       - Maximum number of records to retrieve (default: <tt>100</tt>)
+    # * <tt>offset</tt>      - Number of records to skip (default: <tt>0</tt>)
+    # * <tt>order</tt>       - Hyper Estraier expression to sort the results (example: <tt>@title STRA</tt>, default: ordering by score)
+    # * <tt>attributes</tt>  - String to append to Hyper Estraier search query
+    # * <tt>raw_matches</tt> - Returns raw Hyper Estraier documents instead of instantiated AR objects
+    # * <tt>find</tt>        - Options to pass on to the <tt>ActiveRecord::Base#find</tt> call
+    # * <tt>count</tt>       - Set this to <tt>true</tt> if you're using <tt>fulltext_search</tt> in conjunction with <tt>ActionController::Pagination</tt> to return the number of matches only
+    #
+    # Examples:
+    #
+    #   Article.fulltext_search("biscuits AND gravy")
+    #   Article.fulltext_search("biscuits AND gravy", :limit => 15, :offset => 14)
+    #   Article.fulltext_search("biscuits AND gravy", :attributes => "tag STRINC food")
+    #   Article.fulltext_search("biscuits AND gravy", :attributes => ["tag STRINC food", "@title STRBW Biscuit"])
+    #   Article.fulltext_search("biscuits AND gravy", :order => "@title STRA")
+    #   Article.fulltext_search("biscuits AND gravy", :raw_matches => true)
+    #   Article.fulltext_search("biscuits AND gravy", :find => { :order => :title, :include => :comments })
+    #
+    # Consult the Hyper Estraier documentation on proper query syntax:
+    #
+    #   http://hyperestraier.sourceforge.net/uguide-en.html#searchcond
+    def fulltext_search(query = "", options = {})
+      return [] unless connection_active?
+      options = sanitize_options(options)
+      cond = set_search_condition(create_condition,query, options)
+
+      matches = nil
+      seconds = Benchmark.realtime do
+        result = connection.search(cond, 1);
+        return (result.doc_num rescue 0) if options[:count]
+        return [] unless result
+        matches = get_docs_from(result)
+        return matches if options[:raw_matches]
+      end
+
+      ar_class.logger.debug(
+        ar_class.connection.send(:format_log_entry,
+          "#{ar_class} Search for '#{query}' (#{sprintf("%f", seconds)})",
+          "Condition: #{cond.to_s}"
+        )
+      )
+
+      matches.blank? ? [] : ar_class.find(matches.collect { |m| m.attr('db_id') }, options[:find])
+    end
+
+    # Clear all entries from index
+    def clear_index!
+      return unless connection_active?
+      index.each { |d| connection.out_doc(d.attr('@id')) unless d.nil? }
+    end
+
+    # Peform a full re-index of the model data for this model
+    def reindex!
+      return unless connection_active?
+      ar_class.find(:all).each { |r| r.update_index(true) }
     end
 
     def create_condition
@@ -440,7 +446,8 @@ module EstraierPure
       ar_class.configurations[RAILS_ENV]['estraier'] or {}
     end
   end
-  
+
+
   class Node
     def list
       return false unless @url
@@ -456,7 +463,8 @@ module EstraierPure
       lines.collect { |l| val = l.split(/\t/) and { :id => val[0], :uri => val[1], :digest => val[2] } }
     end
   end
-  
+
+
   class Condition
     def to_s
       "phrase: %s, attrs: %s, max: %s, options: %s, order: %s, skip: %s" % [ phrase, attrs * ', ', max, options, order, skip ]
