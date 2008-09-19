@@ -214,11 +214,13 @@ module ActsAsSearchable
     def document_object #:nodoc:
       doc = EstraierPure::Document::new
       doc.add_attr('db_id', "#{id}")
-      doc.add_attr('type', "#{self.class.to_s}")
-      # Use type instead of self.class.subclasses as the latter is a protected method
-      unless self.class.base_class == self.class and not attribute_names.include?("type")
+
+      is_a_child_class = !(self.class.base_class == self.class)
+      has_subclasses = !self.class.send(:subclasses).empty?
+      if is_a_child_class or has_subclasses
         doc.add_attr("type_base", "#{ self.class.estraier.searchable_base_class.to_s }")
       end
+      doc.add_attr('type', "#{self.class.to_s}")
       doc.add_attr('@uri', "/#{self.class.to_s}/#{id}")
 
       unless self.class.estraier.attributes_to_store.blank?
