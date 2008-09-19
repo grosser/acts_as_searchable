@@ -123,12 +123,6 @@ module ActsAsSearchable
         after_destroy :remove_from_index
         after_save    :estraier_clear_changed_attributes
 
-        #estraier needs to know if this class has subclasses -> different query
-        #but subclasses is protected
-        def self.subclasses_s
-          subclasses.map &:to_s
-        end
-
         #overwrite attributes and alias methods to watch for changes
         estraier.watched_for_change.each do |attr_name|
           method_to_watch = "#{attr_name}="
@@ -392,8 +386,8 @@ module ActsAsSearchable
         return condition
       end
 
-      #search for type_base(=>all subclasses) ?
-      if is_searchable? and not ar_class.subclasses_s.blank?
+      #search for type_base(=>find all subclasses) ?
+      if is_searchable? and not ar_class.send(:subclasses).empty?
         condition.add_attr("type_base STREQ #{ searchable_base_class.to_s }")
       else
         condition.add_attr("type STREQ #{ ar_class.to_s }")
@@ -436,7 +430,10 @@ module ActsAsSearchable
     end
   protected
     def sanitize_options(options)
-      options.reverse_merge!(:limit => 100, :offset => 0)
+      options.reverse_merge!(:offset => 0)
+      options.reverse_merge!(:limit => 100) unless options[:count]
+      options.reverse_merge!(:limit => 0) if options[:count] and not options[:limit]
+
       options.assert_valid_keys(VALID_FULLTEXT_OPTIONS)
       options[:find] ||= {}
       [ :limit, :offset ].each { |k| options[:find].delete(k) }

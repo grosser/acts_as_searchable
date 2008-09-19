@@ -20,6 +20,16 @@ class ActsAsSearchableTest < Test::Unit::TestCase
     assert_equal [],          Comment.estraier.searchable_fields
     assert_equal false,       Comment.estraier.quiet
   end
+
+  def test_sanitize_options_add_limit_to_query
+    assert_equal 100, Notification.estraier.send(:sanitize_options,{})[:limit]
+    assert_equal 1, Notification.estraier.send(:sanitize_options,{:limit=>1})[:limit]
+  end
+
+  def test_sanitize_options_does_not_add_limit_to_count_query
+    assert_equal 0, Notification.estraier.send(:sanitize_options,{:count=>true})[:limit]
+    assert_equal 1, Notification.estraier.send(:sanitize_options,{:count=>true,:limit=>1})[:limit]
+  end
   
   def test_hooks_presence
     assert Article.after_update.include?(:update_index)
@@ -85,8 +95,8 @@ class ActsAsSearchableTest < Test::Unit::TestCase
   def test_fulltext_search_all_types
     reindex!
     assert_equal 1, Article.fulltext_search('mauris', :count => true,:all_types=>true)
-    assert_equal 7,Article.fulltext_search('', :count => true,:all_types=>true)
-    assert_equal 3,Article.fulltext_search('', :all_types=>true).length#all_tyes is ignored if not applicable
+    assert_equal 8, Article.fulltext_search('', :count => true,:all_types=>true)
+    assert_equal 3, Article.fulltext_search('', :all_types=>true).length#all_tyes is ignored if not applicable
   end
 
   def test_fulltext_search_with_wildcard
