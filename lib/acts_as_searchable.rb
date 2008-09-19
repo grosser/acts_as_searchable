@@ -196,7 +196,7 @@ module ActsAsSearchable
       return estraier_changed_attributes.include?(attr_name.to_s)#this attr changed?
     end
 
-    protected
+  protected
 
     def estraier_clear_changed_attributes #:nodoc:
       self.estraier_changed_attributes = []
@@ -279,7 +279,7 @@ module ActsAsSearchable
           "cdate" => %w(created_at created_on).detect{|col| ar_class.column_names.include?(col) },
           "mdate" => %w(updated_at updated_on).detect{|col| ar_class.column_names.include?(col) },
         }.reject!{|k,v|v.blank?}
-        self.attributes_to_store = timestamp_attr.merge(self.attributes_to_store)
+        self.attributes_to_store = timestamp_attr.merge(self.attributes_to_store) if timestamp_attr
       end
     end
 
