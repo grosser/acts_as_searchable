@@ -1,3 +1,15 @@
+* NO LONGER MAINTAINED
+* HAS SOME MINOR ISSUES/BUGS/IS TOO COMPLEX
+
+PLEASE USE THE 
+SIMPLIFIED - SEARCH-BACKEND-AGNOSTIC SUCCESSOR:
+
+http://github.com/grosser/search_do
+
+
+
+
+
 = acts_as_searchable
 
 This library adds fulltext searching capabilities based on Hyper Estraier (http://hyperestraier.sourceforge.net/) to
